@@ -1,0 +1,16 @@
+[project]
+name = "medibot"
+version = "1.0.0"
+description = "MediBot - Advanced RAG with hybrid search, reranking and role-based access control"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "docling>=2.15.0",
+    "transformers>=4.44.0",
+    "qdrant-client>=1.12.0",
+    "fastembed>=0.5.0",
+    "groq>=0.13.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.9.0",
+]

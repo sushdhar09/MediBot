@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+storage/
+certs/
+.idea/
+node_modules/
+.next/
+frontend/out/
