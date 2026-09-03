@@ -278,4 +278,6 @@ frontend/
   streamlit_app.py      Streamlit UI (calls FastAPI backend)
 mediassist_data/         source documents + mediassist.db
 storage/                 generated: Qdrant index + chunk cache
+scripts/
+  make_ca_bundle.ps1     CA bundle generator for TLS-intercepting proxies
 ```

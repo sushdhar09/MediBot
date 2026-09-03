@@ -5,6 +5,6 @@ __pycache__/
 storage/
 certs/
 .idea/
-node_modules/
-.next/
-frontend/out/
+.streamlit/
+frontend/node_modules/
+frontend/.next/
