@@ -245,7 +245,7 @@ python -m app.sql_rag
 |---|---|---|
 | **Qdrant local (embedded)** | Qdrant server via Docker | Docker was unavailable on the build machine. `QdrantClient(path=...)` supports named vectors, sparse vectors with IDF and server-side RRF fusion, so the hybrid design is unchanged. Point `QdrantClient` at a URL for a server deployment. |
 | **FastEmbed** (ONNX) for dense, sparse and reranking | sentence-transformers / torch | Same models, no PyTorch at query time — much faster cold start and a far smaller install. |
-| **Groq** (`llama-3.3-70b-versatile`) | OpenAI / Gemini | Cloud-hosted inference with a usable free tier. Swap via `GROQ_MODEL` in `.env`. |
+| **Groq** (`openai/gpt-oss-20b`) | OpenAI / Gemini | Cloud-hosted inference with a usable free tier. Swap via `GROQ_MODEL` in `.env`. |
 | **HMAC-signed token** | JWT library | Same guarantee (server-signed, role-bearing, expiring) with no extra dependency. |
 | **Streamlit** | Next.js | Keeps everything in Python — no Node.js, no separate build step. Same FastAPI backend, same RBAC enforcement. |
 
