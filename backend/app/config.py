@@ -51,7 +51,7 @@ MIN_RERANK_SCORE = float(os.getenv("MEDIBOT_MIN_RERANK_SCORE", "-6.0"))
 
 # --- LLM --------------------------------------------------------------------
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 
 # --- Auth -------------------------------------------------------------------
 SECRET_KEY = os.getenv("MEDIBOT_SECRET_KEY", "medibot-dev-secret-change-me")

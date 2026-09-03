@@ -4,7 +4,8 @@ from __future__ import annotations
 import os
 import requests
 import streamlit as st
-
+from fastapi import FastAPI
+app = FastAPI()
 API_BASE = os.getenv("MEDIBOT_API_BASE", "http://127.0.0.1:8000").rstrip("/")
 
 st.set_page_config(
