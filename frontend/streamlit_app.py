@@ -18,26 +18,47 @@ st.set_page_config(
 st.markdown(
     """
 <style>
-.stApp { background-color: #f8fafc; }
+/* Overall app background */
+.stApp {
+    background-color: #f9fafb;
+    font-family: "Segoe UI", Roboto, sans-serif;
+}
+
+/* Inputs */
 .stTextInput > div > div > input,
 .stTextArea > div > div > textarea {
     background-color: #ffffff;
     color: #1e293b;
-    border: 1px solid #cbd5e1;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    padding: 8px;
 }
+
+/* Buttons */
 .stButton > button {
-    background-color: #0ea5e9;
+    background: linear-gradient(90deg, #0ea5e9, #0284c7);
     color: #ffffff;
-    font-weight: 700;
+    font-weight: 600;
+    border-radius: 8px;
+    padding: 8px 16px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    transition: 0.2s ease-in-out;
+}
+.stButton > button:hover {
+    background: linear-gradient(90deg, #0284c7, #0369a1);
 }
 .stButton > button:disabled {
     opacity: 0.5;
 }
+
+/* Chat messages */
 .stChatMessage {
     background-color: #ffffff;
-    border: 1px solid #e2e8f0;
+    border: 1px solid #e5e7eb;
     border-radius: 12px;
     padding: 14px 16px;
+    margin-bottom: 12px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
 }
 .stChatMessage.user {
     background-color: #e0f2fe;
@@ -46,13 +67,40 @@ st.markdown(
 .stChatMessage.assistant {
     background-color: #ffffff;
 }
+
+/* Sidebar */
 .stSidebar {
     background-color: #ffffff;
+    border-right: 1px solid #e5e7eb;
+    padding: 16px;
+}
+.stSidebar .stMarkdown {
+    font-size: 0.95rem;
+}
+
+/* Titles and headers */
+h1, h2, h3 {
+    color: #0f172a;
+    font-weight: 700;
+}
+h1 {
+    border-bottom: 2px solid #e5e7eb;
+    padding-bottom: 8px;
+    margin-bottom: 16px;
+}
+
+/* Footer */
+footer {
+    text-align: center;
+    font-size: 0.8rem;
+    color: #6b7280;
+    margin-top: 24px;
 }
 </style>
 """,
     unsafe_allow_html=True,
 )
+
 
 
 def api_get(path: str) -> dict:
@@ -69,8 +117,6 @@ def api_post(path: str, json: dict, headers: dict | None = None) -> dict:
 
 def login_screen() -> None:
     st.title("MediBot")
-    st.markdown("MediAssist Health Network - staff sign in")
-
     try:
         demo_users = api_get("/demo-users")
     except requests.RequestException:
@@ -79,6 +125,7 @@ def login_screen() -> None:
 
     col1, col2 = st.columns([1, 1])
     with col1:
+        st.markdown("### MediAssist Health Network - staff sign in")
         username = st.text_input("Username", key="login_username", placeholder="dr.mehta")
         password = st.text_input("Password", type="password", key="login_password", placeholder="********")
         if st.button("Sign in", use_container_width=True):
