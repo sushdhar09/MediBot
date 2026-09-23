@@ -8,9 +8,13 @@ dependencies = [
     "transformers>=4.44.0",
     "qdrant-client>=1.12.0",
     "fastembed>=0.5.0",
-    "groq>=0.13.0",
+    # upper bound comes from langchain-groq, used by the guardrail judge
+    "groq>=0.13.0,<1.0.0",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     "python-dotenv>=1.0.0",
     "pydantic>=2.9.0",
+    "openevals>=0.2.0",
+    "langchain-groq>=1.1.0",
+    "boto3>=1.35.0",
 ]

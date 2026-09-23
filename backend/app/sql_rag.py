@@ -163,6 +163,8 @@ def sql_rag_with_details(question: str) -> dict:
     columns, rows = execute_sql(sql)
     return {
         "answer": summarise(question, sql, columns, rows),
+        # grounding context for the output guardrail, never returned to the client
+        "context": f"SQL executed:\n{sql}\n\nResult rows:\n{_format_rows(columns, rows)}",
         "sql": sql,
         "raw_sql": raw_sql,
         "columns": columns,

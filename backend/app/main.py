@@ -7,7 +7,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from . import config, rbac, routing
+from . import config, guardrails, rbac, routing
 from .auth import DEMO_USERS, AuthError, authenticate, create_token, decode_token
 from .llm import LLMNotConfigured
 from .retrieval import store
@@ -51,12 +51,26 @@ class Source(BaseModel):
     collection: str
 
 
+class GuardrailInfo(BaseModel):
+    """What the client is allowed to know about a guardrail decision.
+
+    Never the category and never the reason - those stay in the server log,
+    keyed by `reference`.
+    """
+
+    blocked: bool = False
+    redacted: bool = False
+    stage: str | None = None
+    reference: str | None = None
+
+
 class ChatResponse(BaseModel):
     answer: str
     sources: list[Source]
     retrieval_type: str
     role: str
     access_denied: bool = False
+    guardrail: GuardrailInfo = GuardrailInfo()
     debug: dict | None = None
 
 
@@ -132,47 +146,112 @@ def demo_users() -> list[dict]:
     ]
 
 
+def _guarded(
+    response: ChatResponse,
+    *,
+    question: str,
+    context: str,
+    user: dict,
+    is_refusal: bool = False,
+) -> ChatResponse:
+    """Run the output guardrail over a finished answer before it leaves the API."""
+    verdict = guardrails.record(
+        guardrails.guard_output(
+            question=question,
+            answer=response.answer,
+            context=context,
+            role=response.role,
+            sources=[s.model_dump() for s in response.sources],
+            is_refusal=is_refusal,
+        ),
+        username=user["username"],
+        question=question,
+    )
+    info = GuardrailInfo(stage="output", reference=verdict.reference)
+    if verdict.action == "block":
+        return response.model_copy(update={
+            "answer": guardrails.messages.output_refusal(verdict.reference),
+            "sources": [],
+            "debug": None,
+            "guardrail": info.model_copy(update={"blocked": True}),
+        })
+    if verdict.action == "redact":
+        return response.model_copy(update={
+            "answer": (verdict.sanitized_output or response.answer)
+            + guardrails.messages.REDACTION_NOTICE,
+            "guardrail": info.model_copy(update={"redacted": True}),
+        })
+    return response.model_copy(update={"guardrail": info})
+
+
 @app.post("/chat", response_model=ChatResponse)
 def chat(payload: ChatRequest, user: dict = Depends(current_user)) -> ChatResponse:
     role = user["role"]
     question = payload.question.strip()
 
+    # Gate 1: nothing reaches the router, the index or the LLM until this passes.
+    verdict = guardrails.record(
+        guardrails.guard_input(question, role=role),
+        username=user["username"],
+        question=question,
+    )
+    if not verdict.allowed:
+        return ChatResponse(
+            answer=guardrails.messages.input_refusal(verdict.reference),
+            sources=[],
+            retrieval_type="blocked",
+            role=role,
+            guardrail=GuardrailInfo(blocked=True, stage="input", reference=verdict.reference),
+        )
+
     try:
         if routing.is_analytical_question(question):
             if not rbac.can_use_sql_rag(role):
-                return ChatResponse(
-                    answer=rbac.sql_denied_message(role),
-                    sources=[],
-                    retrieval_type="sql_rag",
-                    role=role,
-                    access_denied=True,
+                return _guarded(
+                    ChatResponse(
+                        answer=rbac.sql_denied_message(role),
+                        sources=[],
+                        retrieval_type="sql_rag",
+                        role=role,
+                        access_denied=True,
+                    ),
+                    question=question, context="", user=user, is_refusal=True,
                 )
             result = sql_rag_with_details(question)
-            return ChatResponse(
-                answer=result["answer"],
-                sources=[
-                    Source(
-                        source_document="mediassist.db",
-                        section_title=f"SQL over {', '.join(result['columns']) or 'operational tables'}",
-                        collection="database",
-                    )
-                ],
-                retrieval_type="sql_rag",
-                role=role,
-                debug={"sql": result["sql"], "row_count": result["row_count"]},
+            return _guarded(
+                ChatResponse(
+                    answer=result["answer"],
+                    sources=[
+                        Source(
+                            source_document="mediassist.db",
+                            section_title=f"SQL over {', '.join(result['columns']) or 'operational tables'}",
+                            collection="database",
+                        )
+                    ],
+                    retrieval_type="sql_rag",
+                    role=role,
+                    debug={"sql": result["sql"], "row_count": result["row_count"]},
+                ),
+                question=question, context=result["context"], user=user,
             )
 
         result = answer_from_documents(question, role)
-        return ChatResponse(
-            answer=result["answer"],
-            sources=[Source(**s) for s in result["sources"]],
-            retrieval_type="hybrid_rag",
-            role=role,
-            access_denied=result["access_denied"],
-            debug={
-                "candidates_considered": result["candidates_considered"],
-                "reranked": result["reranked"],
-            },
+        return _guarded(
+            ChatResponse(
+                answer=result["answer"],
+                sources=[Source(**s) for s in result["sources"]],
+                retrieval_type="hybrid_rag",
+                role=role,
+                access_denied=result["access_denied"],
+                debug={
+                    "candidates_considered": result["candidates_considered"],
+                    "reranked": result["reranked"],
+                },
+            ),
+            question=question,
+            context=result["context"],
+            user=user,
+            is_refusal=result["is_refusal"],
         )
     except LLMNotConfigured as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc

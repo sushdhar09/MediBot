@@ -53,6 +53,29 @@ MIN_RERANK_SCORE = float(os.getenv("MEDIBOT_MIN_RERANK_SCORE", "-6.0"))
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
+
+def _flag(name: str, default: bool) -> bool:
+    return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
+
+
+# --- Guardrails -------------------------------------------------------------
+# The input/output guardrail layer. Deterministic checks always run; the
+# OpenEvals LLM judge only runs when they are inconclusive.
+GUARDRAILS_ENABLED = _flag("MEDIBOT_GUARDRAILS_ENABLED", True)
+GUARDRAIL_JUDGE_ENABLED = _flag("MEDIBOT_GUARDRAIL_JUDGE_ENABLED", True)
+# A small, fast model is enough for a yes/no safety verdict.
+GUARDRAIL_MODEL = os.getenv("MEDIBOT_GUARDRAIL_MODEL", "llama-3.1-8b-instant")
+GUARDRAIL_JUDGE_TIMEOUT = float(os.getenv("MEDIBOT_GUARDRAIL_JUDGE_TIMEOUT", "12"))
+# A malformed verdict ALWAYS blocks. This flag only covers the case where the
+# judge cannot be reached at all (no key, network down): with it on, the
+# deterministic verdict stands and the outage is logged at ERROR.
+GUARDRAIL_FALLBACK_DETERMINISTIC = _flag("MEDIBOT_GUARDRAIL_FALLBACK_DETERMINISTIC", True)
+
+# Optional AWS Bedrock Guardrails layer - inactive unless an id is configured.
+BEDROCK_GUARDRAIL_ID = os.getenv("MEDIBOT_BEDROCK_GUARDRAIL_ID", "")
+BEDROCK_GUARDRAIL_VERSION = os.getenv("MEDIBOT_BEDROCK_GUARDRAIL_VERSION", "DRAFT")
+BEDROCK_REGION = os.getenv("MEDIBOT_BEDROCK_REGION", os.getenv("AWS_REGION", "ap-south-1"))
+
 # --- Auth -------------------------------------------------------------------
 SECRET_KEY = os.getenv("MEDIBOT_SECRET_KEY", "medibot-dev-secret-change-me")
 TOKEN_TTL_SECONDS = int(os.getenv("MEDIBOT_TOKEN_TTL_SECONDS", str(8 * 3600)))

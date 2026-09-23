@@ -79,17 +79,22 @@ def can_use_sql_rag(role: str) -> bool:
     return role in SQL_RAG_ROLES
 
 
+def topic_hits(text: str) -> dict[str, int]:
+    """How many topic keywords of each collection appear in `text`."""
+    lowered = text.lower()
+    return {
+        collection: sum(1 for kw in keywords if kw in lowered)
+        for collection, keywords in _TOPIC_HINTS.items()
+    }
+
+
 def guess_topic_collection(question: str) -> str | None:
     """Best-effort guess of which collection a question is aiming at.
 
     Used to turn a blocked query into an informative message rather than a
     generic "no results found".
     """
-    text = question.lower()
-    scores = {
-        collection: sum(1 for kw in keywords if kw in text)
-        for collection, keywords in _TOPIC_HINTS.items()
-    }
+    scores = topic_hits(question)
     best = max(scores, key=lambda c: scores[c])
     return best if scores[best] > 0 else None
 

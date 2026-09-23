@@ -50,20 +50,26 @@ def answer_from_documents(question: str, role: str) -> dict:
         return {
             "answer": rbac.access_denied_message(role, blocked_topic if denied else None),
             "sources": [],
+            "context": "",
+            "is_refusal": True,
             "retrieval_type": "hybrid_rag",
             "access_denied": denied,
             "candidates_considered": len(candidates),
             "reranked": [],
         }
 
+    context = _format_context(top_chunks)
     answer = complete(
         SYSTEM_PROMPT,
-        f"Context passages:\n\n{_format_context(top_chunks)}\n\nStaff question: {question}",
+        f"Context passages:\n\n{context}\n\nStaff question: {question}",
         temperature=0.1,
     )
     return {
         "answer": answer,
         "sources": [chunk.citation() for chunk in top_chunks],
+        # kept for the output guardrail's groundedness check, never returned to the client
+        "context": context,
+        "is_refusal": False,
         "retrieval_type": "hybrid_rag",
         "access_denied": False,
         "candidates_considered": len(candidates),
