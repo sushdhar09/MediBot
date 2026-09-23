@@ -373,8 +373,12 @@ python -m app.sql_rag
 |---|---|---|
 | **Qdrant local (embedded)** | Qdrant server via Docker | Docker was unavailable on the build machine. `QdrantClient(path=...)` supports named vectors, sparse vectors with IDF and server-side RRF fusion, so the hybrid design is unchanged. Point `QdrantClient` at a URL for a server deployment. |
 | **FastEmbed** (ONNX) for dense, sparse and reranking | sentence-transformers / torch | Same models, no PyTorch at query time — much faster cold start and a far smaller install. |
+<<<<<<< HEAD
 | **Groq** (`llama-3.3-70b-versatile`) | OpenAI / Gemini | Cloud-hosted inference with a usable free tier. Swap via `GROQ_MODEL` in `.env`. |
 | **OpenEvals** LLM-as-judge (`llama-3.1-8b-instant` via `langchain-groq`) | AWS Bedrock Guardrails as the primary layer | Bedrock Guardrails needs an AWS account and a provisioned guardrail; OpenEvals runs against the Groq key this project already uses, ships vetted injection / PII / groundedness rubrics, and returns a structured boolean verdict via `with_structured_output`. A Bedrock adapter is included and activates with `MEDIBOT_BEDROCK_GUARDRAIL_ID`. |
+=======
+| **Groq** (`openai/gpt-oss-20b`) | OpenAI / Gemini | Cloud-hosted inference with a usable free tier. Swap via `GROQ_MODEL` in `.env`. |
+>>>>>>> d8c4f4e43f05c35e190ee84543b7ef4740ae50a3
 | **HMAC-signed token** | JWT library | Same guarantee (server-signed, role-bearing, expiring) with no extra dependency. |
 | **Streamlit** | Next.js | Keeps everything in Python — no Node.js, no separate build step. Same FastAPI backend, same RBAC enforcement. |
 
