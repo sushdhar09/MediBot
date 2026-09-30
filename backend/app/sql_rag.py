@@ -12,7 +12,7 @@ import re
 import sqlite3
 from functools import lru_cache
 
-from . import config
+from . import config, observability
 from .llm import complete
 
 log = logging.getLogger(__name__)
@@ -101,6 +101,7 @@ def generate_sql(question: str) -> str:
         f"Database schema:\n{get_schema_prompt()}\n\nQuestion: {question}\n\nSQL:",
         temperature=0.0,
         max_tokens=400,
+        purpose="sql_generate",
     )
 
 
@@ -129,6 +130,11 @@ def clean_sql(raw: str) -> str:
     return text
 
 
+@observability.traced(
+    "sql.execute",
+    run_type="tool",
+    process_outputs=lambda result: {"columns": result[0], "rows": result[1], "row_count": len(result[1])},
+)
 def execute_sql(sql: str) -> tuple[list[str], list[tuple]]:
     """Step 3a: run the query against SQLite."""
     with _connect() as connection:
@@ -152,15 +158,21 @@ def summarise(question: str, sql: str, columns: list[str], rows: list[tuple]) ->
         ANSWER_SYSTEM_PROMPT,
         f"Question: {question}\n\nSQL executed:\n{sql}\n\nResult:\n{_format_rows(columns, rows)}",
         temperature=0.1,
+        purpose="sql_summarise",
     )
 
 
+@observability.traced("sql_rag")
 def sql_rag_with_details(question: str) -> dict:
     """Full chain, returning the intermediate artefacts for the API/debugging."""
     raw_sql = generate_sql(question)
-    sql = clean_sql(raw_sql)
-    log.info("SQL RAG query: %s", sql)
+    try:
+        sql = clean_sql(raw_sql)
+    except SQLRagError as exc:
+        observability.emit("sql.rejected", level=logging.WARNING, raw_sql=raw_sql[:500], reason=str(exc)[:300])
+        raise
     columns, rows = execute_sql(sql)
+    observability.emit("sql.executed", sql=sql, columns=columns, row_count=len(rows))
     return {
         "answer": summarise(question, sql, columns, rows),
         # grounding context for the output guardrail, never returned to the client

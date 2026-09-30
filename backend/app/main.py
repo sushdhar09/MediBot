@@ -2,28 +2,39 @@
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from . import config, guardrails, rbac, routing
+from . import config, guardrails, observability, rbac, routing
 from .auth import DEMO_USERS, AuthError, authenticate, create_token, decode_token
-from .llm import LLMNotConfigured
+from .llm import LLMNotConfigured, LLMUnavailable
 from .retrieval import store
 from .retrieval.rag import answer_from_documents
 from .sql_rag import SQLRagError, sql_rag_with_details
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+observability.configure_logging()
 log = logging.getLogger("medibot")
 
-app = FastAPI(title="MediBot API", version="1.0.0")
+REQUEST_ID_HEADER = "X-Request-ID"
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    yield
+    observability.flush()
+
+
+app = FastAPI(title="MediBot API", version="1.0.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=[REQUEST_ID_HEADER],
 )
 
 
@@ -72,6 +83,8 @@ class ChatResponse(BaseModel):
     access_denied: bool = False
     guardrail: GuardrailInfo = GuardrailInfo()
     debug: dict | None = None
+    # Also the LangSmith trace id, and the key of every log line for this request.
+    request_id: str | None = None
 
 
 def current_user(authorization: str = Header(default="")) -> dict:
@@ -184,10 +197,47 @@ def _guarded(
     return response.model_copy(update={"guardrail": info})
 
 
+def _outcome(response: ChatResponse) -> str:
+    if response.guardrail.blocked:
+        return f"blocked_{response.guardrail.stage}"
+    if response.access_denied:
+        return "access_denied"
+    return "redacted" if response.guardrail.redacted else "answered"
+
+
 @app.post("/chat", response_model=ChatResponse)
-def chat(payload: ChatRequest, user: dict = Depends(current_user)) -> ChatResponse:
-    role = user["role"]
+def chat(payload: ChatRequest, response: Response, user: dict = Depends(current_user)) -> ChatResponse:
     question = payload.question.strip()
+    with observability.request_scope(
+        endpoint="/chat", username=user["username"], role=user["role"]
+    ) as request:
+        response.headers[REQUEST_ID_HEADER] = request.request_id
+        try:
+            result = _chat(question, user, langsmith_extra=request.langsmith_extra())
+        except HTTPException as exc:
+            exc.headers = {**(exc.headers or {}), REQUEST_ID_HEADER: request.request_id}
+            raise
+        return result.model_copy(update={"request_id": request.request_id})
+
+
+@observability.traced(
+    "medibot.chat",
+    process_inputs=lambda inputs: {
+        "question": inputs["question"],
+        "username": inputs["user"]["username"],
+        "role": inputs["user"]["role"],
+    },
+)
+def _chat(question: str, user: dict) -> ChatResponse:
+    """The whole request path under one LangSmith root run."""
+    observability.bind_root_run()
+    result = _pipeline(question, user)
+    observability.annotate(retrieval_type=result.retrieval_type, outcome=_outcome(result))
+    return result
+
+
+def _pipeline(question: str, user: dict) -> ChatResponse:
+    role = user["role"]
 
     # Gate 1: nothing reaches the router, the index or the LLM until this passes.
     verdict = guardrails.record(
@@ -205,7 +255,13 @@ def chat(payload: ChatRequest, user: dict = Depends(current_user)) -> ChatRespon
         )
 
     try:
-        if routing.is_analytical_question(question):
+        analytical = routing.is_analytical_question(question)
+        route = "sql_rag" if analytical else "hybrid_rag"
+        observability.annotate(route=route)
+        observability.emit(
+            "route.decision", route=route, sql_permitted=rbac.can_use_sql_rag(role), role=role
+        )
+        if analytical:
             if not rbac.can_use_sql_rag(role):
                 return _guarded(
                     ChatResponse(
@@ -254,6 +310,9 @@ def chat(payload: ChatRequest, user: dict = Depends(current_user)) -> ChatRespon
             is_refusal=result["is_refusal"],
         )
     except LLMNotConfigured as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    except LLMUnavailable as exc:
+        # Already logged with the underlying provider error in llm.complete.
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
     except SQLRagError as exc:
         log.exception("SQL RAG failed")

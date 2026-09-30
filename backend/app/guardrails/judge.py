@@ -13,18 +13,16 @@ they have deliberately different policies:
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 
-from .. import config
+from langchain_core.callbacks import get_usage_metadata_callback
+
+from .. import config, observability
 from .schemas import JudgeUnavailable, MalformedVerdict
 
 log = logging.getLogger(__name__)
-
-# The judge is a local safety check, not something to ship to LangSmith.
-os.environ.setdefault("LANGSMITH_TRACING", "false")
 
 
 @dataclass(frozen=True)
@@ -114,14 +112,33 @@ def run(prompt: str, feedback_key: str, **params: Any) -> JudgeOutcome:
     """Run one OpenEvals judge. Raises rather than returning an unusable verdict."""
     if not config.GUARDRAIL_JUDGE_ENABLED:
         raise JudgeUnavailable("guardrail judge disabled by configuration")
+    return _run(prompt, feedback_key, langsmith_extra={"name": f"guardrail.judge.{feedback_key}"}, **params)
 
+
+@observability.traced(
+    "guardrail.judge",
+    # the rubric is static and long; the ChatGroq child run shows it rendered
+    process_inputs=lambda inputs: {k: v for k, v in inputs.items() if k != "prompt"},
+)
+def _run(prompt: str, feedback_key: str, **params: Any) -> JudgeOutcome:
     evaluator = _evaluator(prompt, feedback_key)  # raises JudgeUnavailable without a key
     try:
-        result = evaluator(**params)
+        with get_usage_metadata_callback() as usage:
+            result = evaluator(**params)
     except Exception as exc:  # transport, auth, rate limit, timeout
         # Proxies and captive portals answer with whole HTML pages - keep the log readable.
         detail = " ".join(str(exc).split())[:300]
         raise JudgeUnavailable(f"{feedback_key} judge call failed: {detail}") from exc
+
+    for model, counts in usage.usage_metadata.items():
+        observability.record_llm_usage(
+            model=model,
+            purpose=f"judge.{feedback_key}",
+            input_tokens=counts.get("input_tokens", 0),
+            output_tokens=counts.get("output_tokens", 0),
+            total_tokens=counts.get("total_tokens"),
+            on_span=False,  # LangSmith already has these on the ChatGroq run
+        )
 
     if not isinstance(result, dict) or "score" not in result:
         raise MalformedVerdict(f"{feedback_key} judge returned no verdict: {result!r}")

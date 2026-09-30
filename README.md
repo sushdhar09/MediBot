@@ -13,6 +13,8 @@ read. Access control is enforced inside the vector database, not in the UI.
 - **RBAC** — an `access_roles` metadata filter applied inside every Qdrant query
 - **Guardrails** — structured, fail-closed input and output gates (deterministic rules
   + OpenEvals LLM-as-judge, optional AWS Bedrock Guardrails)
+- **Observability** — one LangSmith trace per request (retrieval → rerank → generation
+  → guardrails) plus a JSONL event log with every decision, latency and token count
 
 ---
 
@@ -331,6 +333,78 @@ $env:MEDIBOT_LIVE_JUDGE = "1"; python -m pytest -m live
 
 ---
 
+## Observability & tracing
+
+Any answer can be reconstructed after the fact — what was retrieved, how it was
+reranked, the exact prompt the LLM saw, and what each guardrail decided — from the
+trace and the log alone, without asking the user to reproduce it.
+
+**One id per request.** Every `POST /chat` gets a request id (UUIDv7). It is:
+
+- the **LangSmith root run id** — paste it into the LangSmith search bar to open the trace
+- on **every log line** written during the request (`request_id` field)
+- returned to the client as the `X-Request-ID` header and the `request_id` field, even on errors
+
+The guardrail `reference` a user is shown maps to the same request (`--ref` below).
+
+### The trace (LangSmith)
+
+```
+medibot.chat                       question, username, role → full ChatResponse
+├─ guardrail.input                 verdict: action, category, reason, checker
+│  └─ guardrail.judge.<key>        only when escalated; ChatGroq child run with tokens
+├─ rag.documents                   metadata: decision (generate / refuse_*), top score, threshold
+│  ├─ retrieval.hybrid_search      retriever run: every candidate's full text + fusion score
+│  ├─ rerank                       kept chunks; metadata.ranking = all candidates, scores, kept?
+│  └─ llm.generation               the exact messages sent, the answer, token usage
+│     (or sql_rag → llm.sql_generate → sql.execute → llm.sql_summarise)
+└─ guardrail.output                inputs incl. answer + context; verdict
+```
+
+The root run is tagged `guardrail:<stage>:<action>` and carries `route`, `rag_decision`,
+`outcome` and every `guardrail_<stage>_*` field as metadata, so failing traces can be
+filtered in the LangSmith UI. Tracing is off unless configured:
+
+```dotenv
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=lsv2_...
+LANGSMITH_PROJECT=medibot
+```
+
+### The event log (`logs/medibot.jsonl`)
+
+Every log record is also written as one JSON object per line (rotated at 20 MB, 5
+files kept). Structured events for each request:
+
+| Event | What it records |
+|---|---|
+| `guardrail.decision` | `reference`, `stage`, `action`, `allowed`, `category`, `reason`, `checker`, `degraded`; the question text on blocks only |
+| `route.decision` | `sql_rag` or `hybrid_rag`, whether SQL is permitted for the role |
+| `retrieval.completed` | every candidate: document, section, collection, pages, fusion score |
+| `rerank.completed` | full ranking with cross-encoder scores and which chunks were `kept` |
+| `rag.decision` | `generate` / `refuse_rbac_topic` / `refuse_weak_retrieval`, top score vs threshold |
+| `sql.executed` / `sql.rejected` | the executed SQL and row count, or the raw output and why it was refused |
+| `llm.call` | model, purpose, input / output / total tokens, latency — judge calls included |
+| `request.completed` | the metrics line: `status`, `http_status`, `outcome`, `latency_ms`, per-stage `stages_ms`, token totals and `tokens_by_model`, all guardrail verdicts, `error` |
+
+Full payloads (question, chunk text, prompt, answer) live in the trace; the log keeps
+decisions and numbers, so it stays small and does not copy clinical text around.
+
+### Querying it
+
+```powershell
+cd backend
+python -m scripts.request_report                    # p50/p95 latency, tokens, outcomes, blocks
+python -m scripts.request_report --last 20          # one line per recent request
+python -m scripts.request_report <request_id>       # every event of one request, in order
+python -m scripts.request_report --ref 9f31c2ab     # the request behind a guardrail reference
+```
+
+It is plain JSONL, so `jq`, `pandas.read_json(path, lines=True)` or any log shipper
+works too.
+
+---
+
 ## Retrieval quality
 
 ```powershell
@@ -395,6 +469,7 @@ backend/
     llm.py               Groq wrapper
     routing.py           SQL vs document question router
     sql_rag.py           the three-step SQL chain
+    observability.py     request ids, LangSmith spans, JSONL event log, metrics
     main.py              FastAPI app
     guardrails/
       schemas.py         GuardrailVerdict + the two judge-failure classes
@@ -416,10 +491,12 @@ backend/
     rbac_audit.py        adversarial RBAC test
     guardrail_audit.py   adversarial guardrail test (input + output)
     compare_retrieval.py dense vs hybrid vs reranked
+    request_report.py    query the event log: metrics, one request, a guardrail ref
 frontend/
   streamlit_app.py      Streamlit UI (calls FastAPI backend)
 mediassist_data/         source documents + mediassist.db
 storage/                 generated: Qdrant index + chunk cache
+logs/                    generated: medibot.jsonl structured event log
 scripts/
   make_ca_bundle.ps1     CA bundle generator for TLS-intercepting proxies
 ```

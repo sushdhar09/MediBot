@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from .. import config, rbac
+from .. import config, observability, rbac
 from ..llm import complete
 from .rerank import rerank
 from .store import RetrievedChunk, hybrid_search
@@ -25,6 +25,13 @@ Rules:
 - Be concise and use bullet points for procedures or lists."""
 
 
+def _record_decision(decision: str, **facts) -> None:
+    """Answer or refuse, and on what evidence - on the span, the root run and the log."""
+    observability.span_metadata(decision=decision, **facts)
+    observability.annotate(rag_decision=decision)
+    observability.emit("rag.decision", decision=decision, **facts)
+
+
 def _format_context(chunks: list[RetrievedChunk]) -> str:
     blocks = []
     for index, chunk in enumerate(chunks, start=1):
@@ -33,19 +40,45 @@ def _format_context(chunks: list[RetrievedChunk]) -> str:
     return "\n\n---\n\n".join(blocks)
 
 
+@observability.traced("rag.documents")
 def answer_from_documents(question: str, role: str) -> dict:
     """Run the full document pipeline for one question and one role."""
     candidates = hybrid_search(question, role, limit=config.HYBRID_CANDIDATES)
-    log.info("hybrid retrieval returned %d candidates for role=%s", len(candidates), role)
+    observability.emit(
+        "retrieval.completed",
+        role=role,
+        candidate_count=len(candidates),
+        candidates=[c.summary() for c in candidates],
+    )
 
     top_chunks = rerank(question, candidates, top_k=config.RERANK_TOP_K)
+    kept = {id(c) for c in top_chunks}
+    observability.emit(
+        "rerank.completed",
+        model=config.RERANK_MODEL,
+        top_k=config.RERANK_TOP_K,
+        # `candidates` now carry their rerank scores; kept = made it to the prompt
+        ranking=[
+            {**c.summary(), "kept": id(c) in kept}
+            for c in sorted(candidates, key=lambda c: c.rerank_score or 0.0, reverse=True)
+        ],
+    )
 
     blocked_topic = rbac.guess_topic_collection(question)
     denied = blocked_topic is not None and blocked_topic not in rbac.collections_for_role(role)
 
     # Either the RBAC filter left nothing, or nothing that survived reranking is
     # actually relevant. Both cases get an honest, role-aware refusal.
-    weak = not top_chunks or (top_chunks[0].rerank_score or 0.0) < config.MIN_RERANK_SCORE
+    top_score = top_chunks[0].rerank_score if top_chunks else None
+    weak = not top_chunks or (top_score or 0.0) < config.MIN_RERANK_SCORE
+    decision = "refuse_rbac_topic" if denied else "refuse_weak_retrieval" if weak else "generate"
+    _record_decision(
+        decision,
+        top_rerank_score=None if top_score is None else round(top_score, 4),
+        min_rerank_score=config.MIN_RERANK_SCORE,
+        guessed_topic=blocked_topic,
+        role=role,
+    )
     if denied or weak:
         return {
             "answer": rbac.access_denied_message(role, blocked_topic if denied else None),

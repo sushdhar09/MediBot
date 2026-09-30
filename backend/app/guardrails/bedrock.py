@@ -14,7 +14,7 @@ import logging
 from functools import lru_cache
 from typing import Any, Literal
 
-from .. import config
+from .. import config, observability
 from .judge import JudgeOutcome
 from .schemas import JudgeUnavailable, MalformedVerdict
 
@@ -36,6 +36,7 @@ def _client() -> Any:
     return boto3.client("bedrock-runtime", region_name=config.BEDROCK_REGION)
 
 
+@observability.traced("guardrail.bedrock", run_type="tool")
 def apply(text: str, *, source: Source) -> JudgeOutcome:
     """Run Bedrock Guardrails over one piece of text.
 

@@ -12,5 +12,7 @@ streamlit>=1.41.0
 requests>=2.32.0
 openevals>=0.2.0
 langchain-groq>=1.1.0
+# request tracing (app/observability.py)
+langsmith>=0.14.0
 # optional: only imported when MEDIBOT_BEDROCK_GUARDRAIL_ID is configured
 boto3>=1.35.0

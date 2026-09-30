@@ -76,6 +76,17 @@ BEDROCK_GUARDRAIL_ID = os.getenv("MEDIBOT_BEDROCK_GUARDRAIL_ID", "")
 BEDROCK_GUARDRAIL_VERSION = os.getenv("MEDIBOT_BEDROCK_GUARDRAIL_VERSION", "DRAFT")
 BEDROCK_REGION = os.getenv("MEDIBOT_BEDROCK_REGION", os.getenv("AWS_REGION", "ap-south-1"))
 
+# --- Observability ----------------------------------------------------------
+# Every log record is also written as one JSON object per line to
+# EVENT_LOG_PATH, stamped with the request id, so any request can be replayed
+# from the log alone. LangSmith tracing itself is driven by the standard
+# LANGSMITH_TRACING / LANGSMITH_API_KEY / LANGSMITH_PROJECT variables.
+# Relative values are anchored at the project root, whatever the working dir.
+LOG_DIR = PROJECT_ROOT / os.getenv("MEDIBOT_LOG_DIR", "logs")
+EVENT_LOG_PATH = LOG_DIR / "medibot.jsonl"
+LOG_LEVEL = os.getenv("MEDIBOT_LOG_LEVEL", "INFO").upper()
+LANGSMITH_PROJECT = os.environ.setdefault("LANGSMITH_PROJECT", "medibot")
+
 # --- Auth -------------------------------------------------------------------
 SECRET_KEY = os.getenv("MEDIBOT_SECRET_KEY", "medibot-dev-secret-change-me")
 TOKEN_TTL_SECONDS = int(os.getenv("MEDIBOT_TOKEN_TTL_SECONDS", str(8 * 3600)))

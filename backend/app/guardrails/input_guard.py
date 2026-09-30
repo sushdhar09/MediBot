@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 
-from .. import config
+from .. import config, observability
 from . import bedrock, judge, patterns
 from .schemas import GuardrailVerdict, JudgeUnavailable, MalformedVerdict
 
@@ -32,6 +32,7 @@ def _verdict(
     )
 
 
+@observability.traced("guardrail.input")
 def check(question: str, *, role: str) -> GuardrailVerdict:
     """Decide whether `question` may reach the retrieval pipeline."""
     if not config.GUARDRAILS_ENABLED:

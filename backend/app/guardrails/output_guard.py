@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 
-from .. import config, rbac
+from .. import config, observability, rbac
 from . import bedrock, judge, patterns
 from .schemas import GuardrailVerdict, JudgeUnavailable, MalformedVerdict
 
@@ -62,6 +62,7 @@ def _source_violations(sources: list[dict], role: str) -> list[str]:
     return violations
 
 
+@observability.traced("guardrail.output")
 def check(
     *,
     question: str,

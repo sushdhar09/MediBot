@@ -9,13 +9,22 @@ from __future__ import annotations
 
 import logging
 
-from .. import config
+from .. import config, observability
 from . import embeddings
 from .store import RetrievedChunk
 
 log = logging.getLogger(__name__)
 
 
+@observability.traced(
+    "rerank",
+    process_inputs=lambda inputs: {
+        "query": inputs["query"],
+        "top_k": inputs.get("top_k"),
+        "candidates": [c.summary() for c in inputs["candidates"]],
+    },
+    process_outputs=lambda kept: {"kept": [c.summary() for c in kept]},
+)
 def rerank(
     query: str, candidates: list[RetrievedChunk], top_k: int | None = None
 ) -> list[RetrievedChunk]:
@@ -28,6 +37,11 @@ def rerank(
         chunk.rerank_score = float(score)
 
     ranked = sorted(candidates, key=lambda c: c.rerank_score, reverse=True)
+    # The full ranking, dropped candidates included: "why was X not used?"
+    observability.span_metadata(
+        model=config.RERANK_MODEL,
+        ranking=[{**c.summary(), "kept": i < top_k} for i, c in enumerate(ranked)],
+    )
     if log.isEnabledFor(logging.DEBUG):
         for position, chunk in enumerate(ranked, start=1):
             log.debug(

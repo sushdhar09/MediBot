@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .env
 storage/
+logs/
 certs/
 .idea/
 .streamlit/

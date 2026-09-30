@@ -15,7 +15,7 @@ from functools import lru_cache
 
 from qdrant_client import QdrantClient, models
 
-from .. import config
+from .. import config, observability
 from . import embeddings
 
 log = logging.getLogger(__name__)
@@ -56,6 +56,20 @@ class RetrievedChunk:
             "section_title": self.section_title,
             "collection": self.collection,
         }
+
+    def summary(self) -> dict:
+        """Everything but the text - what the event log records per chunk."""
+        return {
+            **self.citation(),
+            "chunk_type": self.chunk_type,
+            "page_numbers": self.page_numbers,
+            "fusion_score": round(self.fusion_score, 4),
+            "rerank_score": None if self.rerank_score is None else round(self.rerank_score, 4),
+        }
+
+    def as_document(self) -> dict:
+        """LangSmith's retriever view: full text plus the summary as metadata."""
+        return {"type": "Document", "page_content": self.text, "metadata": self.summary()}
 
 
 @lru_cache(maxsize=1)
@@ -147,6 +161,12 @@ def rbac_filter(role: str, collections: list[str] | None = None) -> models.Filte
     return models.Filter(must=conditions)
 
 
+@observability.traced(
+    "retrieval.hybrid_search",
+    run_type="retriever",
+    process_inputs=lambda inputs: {k: v for k, v in inputs.items() if k != "client"},
+    process_outputs=lambda chunks: {"documents": [c.as_document() for c in chunks]},
+)
 def hybrid_search(
     query: str,
     role: str,
