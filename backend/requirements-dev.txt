@@ -1,3 +1,7 @@
 -r requirements.txt
 pytest>=9.0.0
 pytest-cov>=7.0.0
+# RAG evaluation (scripts/ragas_eval.py)
+ragas==0.4.3
+# ragas 0.4.3 imports langchain_community.chat_models.vertexai, removed in 0.4.2
+langchain-community==0.4.1

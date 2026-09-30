@@ -419,6 +419,73 @@ promotes a chunk that fusion placed 4th or 5th.
 
 ---
 
+## Evaluation (RAGAS)
+
+```powershell
+pip install -r backend\requirements-dev.txt
+cd backend
+python -m scripts.ragas_eval                                  # full set
+python -m scripts.ragas_eval --ids cli-curb65 adv-sql-denied  # a subset
+python -m scripts.ragas_eval --responses eval\results\<run>\per_question.json   # re-score saved answers only
+python -m scripts.ragas_eval --fail-under 0.7                 # exit 1 if any aggregate drops below 0.7
+```
+
+Stop the API server first, because embedded Qdrant only lets one process open the index.
+
+**The set** is `backend/eval/eval_set.json`: 24 labeled cases. Each expected answer was
+written from the indexed documents. There are 16 normal questions covering all four
+non-admin roles, the five collections and SQL RAG. There are also 3 edge cases (a false
+premise, a terse fault-code query, an unanswerable question) and 5 adversarial cases
+(prompt injection, two RBAC probes, SQL access by a technician, an off-topic question).
+
+**What runs.** Each case goes through the real `/chat` pipeline as its role, with both
+guardrails, routing, hybrid retrieval, reranking and generation. The passages that reached
+the LLM are recorded and RAGAS scores the answer:
+
+| Metric | Question it answers |
+|---|---|
+| `faithfulness` | Is every claim in the answer supported by the retrieved passages? |
+| `answer_relevancy` | Does the answer address the question? |
+| `context_precision` | Are the relevant passages ranked above the irrelevant ones? (vs the reference) |
+| `context_recall` | Do the passages contain everything the reference answer needs? |
+
+Each case also has an `expected_behavior`: `answer`, `refuse` or `any`. This check is how
+the adversarial cases are graded. A blocked or refused request puts no passages in front
+of the LLM, so its four RAGAS scores are reported as `-` with the reason and are left out
+of the metric means rather than counted as 0.
+
+**Repeatability**
+
+- The judge (`MEDIBOT_EVAL_MODEL`, default `llama-3.3-70b-versatile`) is a different model
+  from the generator. It runs at temperature 0 with a fixed seed.
+- Every judge call is cached in `backend/eval/.ragas_cache/<model>/`, keyed by its exact
+  prompt, so an unchanged answer always gets the same score. Use `--no-cache` to bypass it.
+- Embeddings come from the app's local ONNX model, so they are deterministic and offline.
+- Each run is compared with the previous one: identical answers, identical behaviour,
+  changed scores and the largest per-metric change. The one source of variation left is
+  the generator itself (`temperature=0.1` in `rag.py`). Any score change traces back to a
+  changed answer, which you can see in the comparison.
+
+**Output.** Each run writes `backend/eval/results/<UTC timestamp>/` containing:
+
+- `per_question.csv` and `per_question.json` (answer, passages, behaviour, the four scores,
+  request id)
+- `summary.json` (per-metric aggregate overall and per category, behaviour pass rate,
+  models, dataset hash, comparison with the previous run)
+
+The same tables are printed to the console.
+
+> **Groq free tier:** a first full run uses on the order of 150-200K judge tokens, which
+> is more than the 70b model's daily free quota. Completed judge calls are cached, so
+> re-running the next day picks up where the last run stopped. Alternatively, raise the
+> tier or point `MEDIBOT_EVAL_MODEL` at a model with a larger quota.
+
+`tests/test_ragas_eval.py` covers the harness offline with a fake judge: the dataset
+checks, what gets captured from the pipeline, the scoring, cache hits, and two script
+runs agreeing.
+
+---
+
 ## SQL RAG
 
 `sql_rag_chain(question: str) -> str` in `backend/app/sql_rag.py`, three explicit
@@ -492,6 +559,9 @@ backend/
     guardrail_audit.py   adversarial guardrail test (input + output)
     compare_retrieval.py dense vs hybrid vs reranked
     request_report.py    query the event log: metrics, one request, a guardrail ref
+    ragas_eval.py        RAGAS evaluation: per-question + aggregate scores
+  eval/
+    eval_set.json        labeled question / expected-answer set
 frontend/
   streamlit_app.py      Streamlit UI (calls FastAPI backend)
 mediassist_data/         source documents + mediassist.db

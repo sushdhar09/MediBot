@@ -54,6 +54,12 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 
 
+# --- Evaluation (scripts/ragas_eval.py) --------------------------------------
+# The RAGAS judge. Deliberately a different model from GROQ_MODEL so the
+# generator is not grading its own answers.
+EVAL_JUDGE_MODEL = os.getenv("MEDIBOT_EVAL_MODEL", "llama-3.3-70b-versatile")
+
+
 def _flag(name: str, default: bool) -> bool:
     return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
 

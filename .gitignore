@@ -9,3 +9,5 @@ certs/
 .streamlit/
 frontend/node_modules/
 frontend/.next/
+backend/eval/results/
+backend/eval/.ragas_cache/
