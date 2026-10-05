@@ -58,6 +58,8 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 # The RAGAS judge. Deliberately a different model from GROQ_MODEL so the
 # generator is not grading its own answers.
 EVAL_JUDGE_MODEL = os.getenv("MEDIBOT_EVAL_MODEL", "llama-3.3-70b-versatile")
+# Heuristic check: a /chat request slower than this fails.
+EVAL_MAX_LATENCY_MS = float(os.getenv("MEDIBOT_EVAL_MAX_LATENCY_MS", "30000"))
 
 
 def _flag(name: str, default: bool) -> bool:

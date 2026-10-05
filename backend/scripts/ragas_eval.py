@@ -34,6 +34,7 @@ import math
 import os
 import re
 import sys
+import time
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,6 +49,7 @@ from ragas.embeddings import BaseRagasEmbeddings
 from app import config, main, observability, rbac
 from app.auth import DEMO_USERS
 from app.retrieval import embeddings, rag, store
+from scripts import answer_judge, heuristics
 
 EVAL_DIR = Path(__file__).resolve().parents[1] / "eval"
 DATASET_PATH = EVAL_DIR / "eval_set.json"
@@ -133,7 +135,9 @@ def run_case(case: dict) -> dict:
                 patch.object(rag, "_format_context", record_passages), \
                 patch.object(main, "sql_rag_with_details", record_sql):
             record["request_id"] = request.request_id
+            started = time.perf_counter()
             response = main._chat(case["question"], user, langsmith_extra=request.langsmith_extra())
+            record["latency_ms"] = round((time.perf_counter() - started) * 1000, 1)
     except Exception as exc:  # e.g. the 503 raised when the LLM is unreachable
         detail = getattr(exc, "detail", None) or exc
         return {**record, "response": "", "retrieved_contexts": [], "behavior": "error",
@@ -327,7 +331,8 @@ def compare(records: list[dict], previous_dir: Path) -> dict:
 CSV_FIELDS = (
     "id", "category", "role", "expected_behavior", "behavior", "behavior_pass",
     "retrieval_type", "n_contexts", *METRICS, "note", "question", "response",
-    "reference", "request_id",
+    "reference", "request_id", "latency_ms", "heuristics_passed", "heuristics_failed", "judge_passed", "judge_overall",
+    *(f"judge_{c}" for c in answer_judge.CRITERIA), "judge_justification",
 )
 
 
@@ -343,7 +348,15 @@ def write_results(run_dir: Path, records: list[dict], summary: dict) -> None:
         writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS, extrasaction="ignore")
         writer.writeheader()
         for record in records:
-            writer.writerow({**record, "n_contexts": len(record["retrieved_contexts"])})
+            judge = record.get("judge") or {}
+            heur = record.get("heuristics") or {}
+            writer.writerow({
+                **record, "heuristics_passed": heur.get("passed"),
+                "heuristics_failed": ",".join(heur.get("failed", [])), "n_contexts": len(record["retrieved_contexts"]),
+                "judge_passed": judge.get("passed"), "judge_overall": judge.get("overall_score"),
+                **{f"judge_{c}": (judge.get("scores") or {}).get(c) for c in answer_judge.CRITERIA},
+                "judge_justification": judge.get("error") or judge.get("justification"),
+            })
 
 
 def _fmt(value: float | None) -> str:
@@ -369,6 +382,24 @@ def print_report(records: list[dict], summary: dict) -> None:
         )
         print(f"{name:<24}{block['cases']:>6}{block['behavior_pass_rate']:>10.0%}{cells}")
 
+    heur = summary["heuristics"]
+    print(f"\nHeuristic checks: {_fmt(heur['pass_rate'])} of cases pass every applicable check")
+    for name, c in heur["checks"].items():
+        print(f"  {name:<22}pass {c['passed']:<3} fail {c['failed']:<3} n/a {c['not_applicable']}")
+    for r in records:
+        for name in r["heuristics"]["failed"]:
+            print(f"  FAIL {r['id']:<24}{name}: {r['heuristics']['checks'][name]['detail']}")
+
+    judge = summary.get("judge")
+    if judge:
+        print(f"\nLLM judge ({summary['judge_model']}): pass rate {_fmt(judge['pass_rate'])}, "
+              f"mean overall {_fmt(judge['overall_mean'])}/5, {judge['errors']} unusable verdict(s)")
+        print("  " + ", ".join(f"{c} {_fmt(b['mean'])} (n={b['scored']})" for c, b in judge["criteria"].items()))
+        for r in records:
+            j = r["judge"]
+            print(f"  {r['id']:<24}{'PASS' if j['passed'] else 'FAIL':<6}{_fmt(j['overall_score']):>6}  "
+                  f"{(j['error'] or j['justification'])[:100]}")
+
     comparison = summary.get("comparison")
     if comparison:
         deltas = ", ".join(f"{m}={_fmt(d)}" for m, d in comparison["max_abs_delta"].items())
@@ -391,6 +422,7 @@ def run(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-cache", action="store_true", help="do not read or write the judge cache")
     parser.add_argument("--fail-under", type=float,
                         help="exit 1 if any overall metric mean is below this value")
+    parser.add_argument("--no-judge", action="store_true", help="skip the rubric-based LLM judge step")
     parser.add_argument("--verbose", action="store_true", help="show application and ragas logs")
     args = parser.parse_args(argv)
 
@@ -431,6 +463,12 @@ def run(argv: list[str] | None = None) -> int:
     cache = None if args.no_cache else judge_cache()
     score(records, llm=judge_llm(cache), embeddings_model=LocalEmbeddings(), workers=args.workers)
 
+    heuristics.check_all(records)
+    if not args.no_judge:
+        answer_judge.judge_all(
+            records, cache_dir=None if args.no_cache else CACHE_DIR / "judge" / _slug(config.EVAL_JUDGE_MODEL)
+        )
+
     run_dir = RESULTS_DIR / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     summary = {
         "run_id": run_dir.name,
@@ -441,7 +479,10 @@ def run(argv: list[str] | None = None) -> int:
         "responses_from": str(args.responses) if args.responses else None,
         "judge_cache": not args.no_cache,
         "aggregate": aggregate(records),
+        "heuristics": heuristics.aggregate(records),
     }
+    if not args.no_judge:
+        summary["judge"] = answer_judge.aggregate(records)
     previous = previous_run(run_dir)
     if previous:
         summary["comparison"] = compare(records, previous)
@@ -452,6 +493,10 @@ def run(argv: list[str] | None = None) -> int:
     errors = [r["id"] for r in records if r["behavior"] == "error"]
     if errors:
         print(f"{len(errors)} case(s) could not be run: {', '.join(errors)}")
+        return 1
+    failing = [r["id"] for r in records if not r["heuristics"]["passed"]]
+    if failing:
+        print(f"{len(failing)} case(s) failed a heuristic check: {', '.join(failing)}")
         return 1
     if args.fail_under is not None:
         low = {
