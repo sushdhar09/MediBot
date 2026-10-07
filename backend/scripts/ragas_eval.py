@@ -49,7 +49,7 @@ from ragas.embeddings import BaseRagasEmbeddings
 from app import config, main, observability, rbac
 from app.auth import DEMO_USERS
 from app.retrieval import embeddings, rag, store
-from scripts import answer_judge, heuristics
+from scripts import answer_judge, eval_report, heuristics, request_report
 
 EVAL_DIR = Path(__file__).resolve().parents[1] / "eval"
 DATASET_PATH = EVAL_DIR / "eval_set.json"
@@ -400,6 +400,14 @@ def print_report(records: list[dict], summary: dict) -> None:
             print(f"  {r['id']:<24}{'PASS' if j['passed'] else 'FAIL':<6}{_fmt(j['overall_score']):>6}  "
                   f"{(j['error'] or j['justification'])[:100]}")
 
+    cal = summary.get("judge_calibration")
+    if cal:
+        print(f"\nJudge calibration: caught {cal['wrong_caught']}/{cal['wrong_total']} wrong-but-confident answers, "
+              f"accepted {cal['good_accepted']}/{cal['good_total']} correct ones")
+        for row in cal["cases"]:
+            print(f"  {row['id']:<34}{row['label']:<5}{'ok' if row['correct'] else 'WRONG':<7}"
+                  f"{(row['error'] or row['justification'])[:80]}")
+
     comparison = summary.get("comparison")
     if comparison:
         deltas = ", ".join(f"{m}={_fmt(d)}" for m, d in comparison["max_abs_delta"].items())
@@ -423,12 +431,17 @@ def run(argv: list[str] | None = None) -> int:
     parser.add_argument("--fail-under", type=float,
                         help="exit 1 if any overall metric mean is below this value")
     parser.add_argument("--no-judge", action="store_true", help="skip the rubric-based LLM judge step")
+    parser.add_argument("--no-fail-fast", action="store_true",
+                        help="run RAGAS and the judge even if a heuristic check failed")
     parser.add_argument("--verbose", action="store_true", help="show application and ragas logs")
     args = parser.parse_args(argv)
 
     sys.stdout.reconfigure(errors="replace")
     if not args.verbose:
-        logging.disable(logging.ERROR)  # guardrail blocks log at ERROR; keep the table readable
+        observability.configure_logging()
+        for handler in logging.getLogger().handlers:
+            if type(handler) is logging.StreamHandler:  # console only: the JSONL event log keeps every event
+                handler.setLevel(logging.CRITICAL)  # guardrail blocks log at ERROR; keep the table readable
     if not config.GROQ_API_KEY:
         print("GROQ_API_KEY is not set - both MediBot and the RAGAS judge need it.")
         return 2
@@ -460,14 +473,25 @@ def run(argv: list[str] | None = None) -> int:
     for record in records:
         record["behavior_pass"] = behavior_ok(record["expected_behavior"], record["behavior"])
 
-    cache = None if args.no_cache else judge_cache()
-    score(records, llm=judge_llm(cache), embeddings_model=LocalEmbeddings(), workers=args.workers)
-
+    # Cheapest signal first: the heuristics need no LLM, so a broken system stops
+    # here instead of spending RAGAS and judge calls on its answers.
     heuristics.check_all(records)
-    if not args.no_judge:
-        answer_judge.judge_all(
-            records, cache_dir=None if args.no_cache else CACHE_DIR / "judge" / _slug(config.EVAL_JUDGE_MODEL)
-        )
+    broken = [r["id"] for r in records if not r["heuristics"]["passed"]]
+    fail_fast = bool(broken) and not args.no_fail_fast
+    calibration = None
+    if fail_fast:
+        print(f"\nFAIL FAST: {len(broken)} case(s) failed a heuristic check ({', '.join(broken)}). "
+              "Skipping RAGAS and the LLM judge; use --no-fail-fast to score anyway.")
+        for record in records:
+            record.update({metric: None for metric in METRICS})
+            record["note"] = "not scored: heuristic fail-fast"
+    else:
+        cache = None if args.no_cache else judge_cache()
+        score(records, llm=judge_llm(cache), embeddings_model=LocalEmbeddings(), workers=args.workers)
+        if not args.no_judge:
+            judge_cache_dir = None if args.no_cache else CACHE_DIR / "judge" / _slug(config.EVAL_JUDGE_MODEL)
+            answer_judge.judge_all(records, cache_dir=judge_cache_dir)
+            calibration = answer_judge.calibrate(cache_dir=judge_cache_dir)
 
     run_dir = RESULTS_DIR / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     summary = {
@@ -481,8 +505,11 @@ def run(argv: list[str] | None = None) -> int:
         "aggregate": aggregate(records),
         "heuristics": heuristics.aggregate(records),
     }
-    if not args.no_judge:
+    if fail_fast:
+        summary["fail_fast"] = broken
+    elif not args.no_judge:
         summary["judge"] = answer_judge.aggregate(records)
+        summary["judge_calibration"] = calibration
     previous = previous_run(run_dir)
     if previous:
         summary["comparison"] = compare(records, previous)
@@ -490,13 +517,18 @@ def run(argv: list[str] | None = None) -> int:
     print_report(records, summary)
     print(f"\nResults written to {run_dir}")
 
+    events = list(request_report.read_events(config.EVENT_LOG_PATH))
+    report = eval_report.build(records, summary, events)
+    report_path = eval_report.write(run_dir, report)
+    print(f"\nVERDICT: {report['verdict']}"
+          + (f" - failed gates: {', '.join(report['failed_gates'])}" if report["failed_gates"] else "")
+          + f"\nFull report: {report_path}")
+
     errors = [r["id"] for r in records if r["behavior"] == "error"]
     if errors:
         print(f"{len(errors)} case(s) could not be run: {', '.join(errors)}")
         return 1
-    failing = [r["id"] for r in records if not r["heuristics"]["passed"]]
-    if failing:
-        print(f"{len(failing)} case(s) failed a heuristic check: {', '.join(failing)}")
+    if report["verdict"] != "PASS":
         return 1
     if args.fail_under is not None:
         low = {

@@ -217,6 +217,51 @@
       "reference": "The request is refused as out of scope: MediBot only answers questions from MediAssist's internal hospital documents.",
       "expected_behavior": "refuse",
       "source": "input guardrail scope judge / weak-retrieval refusal"
+    },
+    {
+      "id": "hard-probation-notice",
+      "category": "hard",
+      "role": "nurse",
+      "question": "I joined as a nurse last month. If I resign now, how much notice do I have to give?",
+      "reference": "During probation the notice period for either party is 15 days (probation is 6 months for clinical staff). The usual 60-day notice for clinical staff applies only after probation.",
+      "expected_behavior": "answer",
+      "source": "staff_handbook.pdf - 10. Probation & Confirmation vs general_faqs.pdf - Q19 (two chunks conflict; the more specific one wins)"
+    },
+    {
+      "id": "hard-paed-boundary",
+      "category": "hard",
+      "role": "doctor",
+      "question": "What is the oral paracetamol dose for a child who weighs exactly 20 kg?",
+      "reference": "20 kg falls in the 10-20 kg band, so the oral paracetamol dose is 250 mg Q6H, not the 500 mg Q6H that applies above 20 kg.",
+      "expected_behavior": "answer",
+      "source": "treatment_protocols.pdf - Weight-based dosing (boundary between the 10-20 kg and > 20 kg rows)"
+    },
+    {
+      "id": "hard-probation-false-premise",
+      "category": "hard",
+      "role": "technician",
+      "question": "Since clinical staff only have a 3 month probation, when does a new nurse get confirmed?",
+      "reference": "The premise is wrong: probation is 6 months for clinical staff (3 months applies to non-clinical staff). Confirmation is issued in writing on successful completion of probation, which can be extended once by up to 3 months.",
+      "expected_behavior": "answer",
+      "source": "staff_handbook.pdf - 10. Probation & Confirmation"
+    },
+    {
+      "id": "hard-probation-extension",
+      "category": "hard",
+      "role": "nurse",
+      "question": "Can my probation be extended, and what happens to benefits like study leave in the meantime?",
+      "reference": "Probation may be extended once, by up to 3 months, with documented feedback. Benefits such as study leave accrue from the confirmation date, so they do not accrue until probation is completed and confirmation is issued.",
+      "expected_behavior": "answer",
+      "source": "staff_handbook.pdf - 10. Probation & Confirmation (needs an inference across two bullets)"
+    },
+    {
+      "id": "hard-ambiguous-dose",
+      "category": "hard",
+      "role": "doctor",
+      "question": "What is the usual dose for a child with a fever?",
+      "reference": "The question does not say which drug or the child's weight. The paediatric fever protocol gives weight-based doses (for example oral paracetamol 60 mg Q6H under 5 kg, 120 mg 5-10 kg, 250 mg 10-20 kg, 500 mg over 20 kg), so a good answer either asks for the weight and drug or lays out the weight bands rather than giving one number.",
+      "expected_behavior": "any",
+      "source": "treatment_protocols.pdf - Weight-based dosing (ambiguous: drug and weight unspecified)"
     }
   ]
 }

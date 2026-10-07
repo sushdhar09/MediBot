@@ -238,6 +238,7 @@ def test_two_runs_of_the_script_agree(stub_pipeline, monkeypatch, tmp_path):
         return judges[-1]
 
     monkeypatch.setattr(ragas_eval, "judge_llm", _judge)
+    monkeypatch.setitem(ragas_eval.eval_report.THRESHOLDS, "ragas.context_recall", 0.5)  # fake judge scores 0.5
     dataset = tmp_path / "set.json"
     dataset.write_text(json.dumps({"cases": [
         _case(id="answered"),
@@ -283,3 +284,31 @@ def test_compare_reports_drift_between_runs(tmp_path):
     drift = ragas_eval.compare(after, tmp_path)
     assert drift["max_abs_delta"]["faithfulness"] == 0.2
     assert drift["changed_scores"] == [{"id": "answered", "metric": "faithfulness", "before": 0.8, "after": 0.6}]
+
+
+def test_heuristic_failure_stops_the_run_before_any_judge_call(stub_pipeline, monkeypatch, tmp_path):
+    """Heuristics run first: a broken system must not cost RAGAS or judge calls."""
+    monkeypatch.setattr(config, "GROQ_API_KEY", "test-key")
+    monkeypatch.setattr(ragas_eval.store, "count_points", lambda: 1)
+    monkeypatch.setattr(ragas_eval, "RESULTS_DIR", tmp_path / "results")
+    monkeypatch.setattr(ragas_eval, "CACHE_DIR", tmp_path / "cache")
+
+    def _no_llm(*args, **kwargs):
+        raise AssertionError("an LLM-backed step ran after a heuristic failure")
+
+    monkeypatch.setattr(ragas_eval, "judge_llm", _no_llm)
+    monkeypatch.setattr(ragas_eval, "score", _no_llm)
+    monkeypatch.setattr(ragas_eval.answer_judge, "judge_all", _no_llm)
+    monkeypatch.setattr(ragas_eval.answer_judge, "calibrate", _no_llm)
+    dataset = tmp_path / "set.json"
+    dataset.write_text(json.dumps({"cases": [
+        # the stubbed pipeline answers this, so refusal_enforced fails
+        _case(id="should-refuse", category="adversarial", expected_behavior="refuse"),
+    ]}), encoding="utf-8")
+
+    assert ragas_eval.run(["--dataset", str(dataset), "--verbose"]) == 1
+    (run_dir,) = (tmp_path / "results").iterdir()
+    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary["fail_fast"] == ["should-refuse"]
+    report = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
+    assert report["verdict"] == "FAIL" and "heuristics.pass_rate" in report["failed_gates"]

@@ -189,6 +189,36 @@ def judge_all(records: list[dict], **kwargs) -> None:
         record["judge"] = judge_answer(record, **kwargs)
 
 
+CALIBRATION_PATH = Path(__file__).resolve().parents[1] / "eval" / "judge_calibration.json"
+
+
+def calibrate(*, path: Path = CALIBRATION_PATH, **kwargs) -> dict:
+    """Run the judge on answers with a known verdict, to prove it is not just agreeing.
+
+    `bad` answers are confident but wrong, mis-cited, incomplete or should have
+    been refusals; the judge must fail every one. `good` answers must pass, so a
+    judge that fails everything cannot score well either.
+    """
+    cases = json.loads(path.read_text(encoding="utf-8"))["cases"]
+    rows = []
+    for case in cases:
+        result = judge_answer(case, **kwargs)
+        rows.append({
+            "id": case["id"], "label": case["label"], "flaw": case["flaw"], "passed": result["passed"],
+            "overall_score": result["overall_score"], "error": result["error"],
+            "justification": result["justification"],
+            # a verdict we could not obtain proves nothing, so it counts against the judge
+            "correct": result["error"] is None and result["passed"] == (case["label"] == "good"),
+        })
+    bad = [r for r in rows if r["label"] == "bad"]
+    good = [r for r in rows if r["label"] == "good"]
+    return {
+        "wrong_total": len(bad), "wrong_caught": sum(r["correct"] for r in bad),
+        "good_total": len(good), "good_accepted": sum(r["correct"] for r in good),
+        "cases": rows,
+    }
+
+
 def aggregate(records: list[dict]) -> dict:
     judged = [r["judge"] for r in records if r.get("judge")]
     out: dict = {

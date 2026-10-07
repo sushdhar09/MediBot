@@ -62,3 +62,12 @@ def test_fabricated_dosage_is_blocked_end_to_end():
     assert verdict.action == "block"
     assert verdict.category == "fabrication"
     assert verdict.degraded is False
+
+
+def test_rubric_judge_catches_confident_wrong_answers():
+    """The real judge model must fail the planted wrong-but-confident answers."""
+    from scripts import answer_judge
+
+    result = answer_judge.calibrate()
+    missed = [r["id"] for r in result["cases"] if not r["correct"]]
+    assert not missed, f"judge got these calibration cases wrong: {missed}"

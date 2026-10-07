@@ -85,6 +85,29 @@ INPUT_RULES: tuple[Rule, ...] = (
         r"\b(?:system|admin(?:istrator)?|security)\s+(?:override|bypass|mode)\b",
         "fake system directive",
     ),
+    # Trying to dictate the guardrail's own verdict, i.e. make it fail open.
+    _rule(
+        "guardrail_manipulation", "block",
+        r"[\"']?\b(?:score|verdict|flagged|is_safe|safe|allowed)\b[\"']?\s*[:=]\s*[\"']?(?:true|false|safe|allow(?:ed)?|pass)\b|"
+        r"\b(?:mark|rate|classify|score|label|treat)\s+(?:this|it|the\s+(?:input|question|message|request))\s+as\s+"
+        r"(?:safe|harmless|benign|allowed|clean|not\s+(?:an?\s+)?(?:injection|attack|unsafe))\b|"
+        r"\b(?:respond|reply|answer|output|return)\s+(?:only\s+)?(?:with\s+)?[\"']?(?:true|false|safe|allow)[\"']?\s+"
+        r"(?:to|for|as)\s+(?:the\s+)?(?:guardrail|classifier|judge|filter|moderation|safety)",
+        "attempt to dictate the guardrail verdict",
+    ),
+    # Asking the assistant to reveal why something was refused or which rule fired.
+    _rule(
+        "guardrail_probe", "block",
+        r"\b(?:explain|reveal|tell\s+me|show|list|describe)\b[^.?!]{0,40}\b(?:your\s+|the\s+)?"
+        r"(?:guardrails?|block(?:ing)?\s+(?:reasons?|rules?)|refusal\s+reasons?|safety\s+(?:rules?|filters?))\b|"
+        r"\bexplain\s+(?:exactly\s+|precisely\s+|in\s+detail\s+)?why\s+you\s+(?:can(?:'t|not)|won't|are\s+unable\s+to|"
+        r"refused|declined|blocked)\b|"
+        r"\b(?:which|what)\s+(?:rule|filter|guardrail|policy|category|keyword|pattern)s?\s+(?:blocked|triggered|flagged|"
+        r"caught|stopped)\b|"
+        r"\bwhy\s+(?:was|did)\s+(?:my|this|that)\s+(?:question|request|message|query|prompt)\s+"
+        r"(?:blocked|refused|rejected|denied|flagged)\b",
+        "request for the guardrail's block reason",
+    ),
     # Role and access-control override.
     _rule(
         "access_override", "block",
@@ -260,6 +283,14 @@ SYSTEM_LEAK_RULES: tuple[Rule, ...] = (
     ),
     _rule("system_prompt_leak", "block", r"\baccess_roles\b|\bQDRANT_COLLECTION\b|\bGROQ_API_KEY\b",
           "internal configuration identifier"),
+    _rule(
+        "guardrail_reason_leak", "block",
+        r"\b(?:prompt_injection|access_override|guardrail_manipulation|guardrail_probe|guardrail_error|"
+        r"out_of_scope|unsafe_request|abusive_language|malformed_input|rbac_violation|fail_closed)\b|"
+        r"\b(?:blocked|refused|flagged)\s+(?:by|because\s+of)\s+(?:the\s+|a\s+|my\s+)?"
+        r"(?:guardrail|safety\s+filter|deterministic\s+rule|injection\s+(?:rule|filter))",
+        "guardrail block reason in the answer",
+    ),
     _rule(
         "system_prompt_leak", "suspect",
         r"\bmy\s+(?:system\s+)?instructions\s+(?:are|say|state)\b|"

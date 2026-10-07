@@ -94,7 +94,11 @@ def check(question: str, *, role: str) -> GuardrailVerdict:
             category = "prompt_injection" if key == "bedrock_guardrail" else key
             return _verdict(_BLOCK, category, outcome.reasoning or key, f"{kind}:{key}")
 
-    if not reachable and not config.GUARDRAIL_FALLBACK_DETERMINISTIC:
+    if not reachable and (suspects or not config.GUARDRAIL_FALLBACK_DETERMINISTIC):
+        # The fallback only covers "possibly off-topic". An attack-shaped signal
+        # (injection, social engineering) never gets through just because the
+        # judge is down, so an attacker cannot fail the guardrail open by
+        # making the judge unreachable.
         return _verdict(_BLOCK, "guardrail_error", "no guardrail judge reachable", "fail_closed")
     if not reachable:
         log.error(

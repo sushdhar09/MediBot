@@ -102,3 +102,40 @@ def test_aggregate():
     summary = answer_judge.aggregate(records)
     assert summary["pass_rate"] == 0.5 and summary["errors"] == 1
     assert summary["criteria"]["accuracy"] == {"mean": 5, "scored": 1}
+
+
+# --- calibration: does the judge simply agree with confident answers? ------------------------
+
+def _real_calibration_cases():
+    return json.loads(answer_judge.CALIBRATION_PATH.read_text(encoding="utf-8"))["cases"]
+
+
+def test_calibration_set_has_wrong_but_confident_and_correct_answers():
+    cases = _real_calibration_cases()
+    assert sum(c["label"] == "bad" for c in cases) >= 3 and sum(c["label"] == "good" for c in cases) >= 2
+    assert {c["label"] for c in cases} == {"good", "bad"}
+    assert all(c["flaw"] for c in cases)
+
+
+def test_a_judge_that_agrees_with_everything_fails_calibration():
+    result = answer_judge.calibrate(complete=lambda s, u: _reply())  # always 5/5
+    assert result["wrong_caught"] == 0 and result["good_accepted"] == result["good_total"]
+
+
+def test_a_judge_that_fails_everything_is_also_caught():
+    result = answer_judge.calibrate(complete=lambda s, u: _reply(1, 1, 1, 1))
+    assert result["wrong_caught"] == result["wrong_total"] and result["good_accepted"] == 0
+
+
+def test_a_discriminating_judge_passes_calibration():
+    def complete(system, user):
+        wrong = any(c["response"] in user and c["label"] == "bad" for c in _real_calibration_cases())
+        return _reply(1, 2, 1, 1) if wrong else _reply()
+
+    result = answer_judge.calibrate(complete=complete)
+    assert result["wrong_caught"] == result["wrong_total"] and result["good_accepted"] == result["good_total"]
+
+
+def test_an_unusable_verdict_counts_against_the_judge():
+    result = answer_judge.calibrate(complete=lambda s, u: "garbage")
+    assert result["wrong_caught"] == 0 and result["good_accepted"] == 0
